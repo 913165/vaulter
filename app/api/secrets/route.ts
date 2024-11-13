@@ -1,9 +1,7 @@
 import { NextResponse, NextRequest } from 'next/server'
 import { encrypt, decrypt } from '../utils/encryption'
 import { getAuth } from '@clerk/nextjs/server'
-
-// In-memory storage (replace with database in production)
-const secrets = new Map()
+import prisma from '../../../lib/db'
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,10 +23,24 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Store with user prefix to separate secrets per user
-    const secretKey = `${userId}:${name}`
     const encryptedValue = await encrypt(value)
-    secrets.set(secretKey, encryptedValue)
+
+    await prisma.secret.upsert({
+      where: {
+        userId_key: {
+          userId,
+          key: name,
+        }
+      },
+      update: {
+        value: encryptedValue
+      },
+      create: {
+        userId,
+        key: name,
+        value: encryptedValue
+      }
+    })
 
     return NextResponse.json({ 
       message: 'Secret stored successfully',
@@ -54,18 +66,20 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Filter secrets for current user
-    const userSecrets = Array.from(secrets.entries())
-      .filter(([key]) => key.startsWith(`${userId}:`))
-      .map(([key, value]) => ({
-        name: key.split(':')[1],
-        encryptedValue: value
-      }))
+    const secrets = await prisma.secret.findMany({
+      where: {
+        userId
+      },
+      select: {
+        key: true,
+        value: true
+      }
+    })
 
     const decryptedSecrets = await Promise.all(
-      userSecrets.map(async (secret) => ({
-        name: secret.name,
-        value: await decrypt(secret.encryptedValue as string)
+      secrets.map(async (secret) => ({
+        name: secret.key,
+        value: await decrypt(secret.value)
       }))
     )
 
